@@ -210,7 +210,7 @@ class ParkingValidator(tk.Frame):
 		password=getpass.getpass("password for REST API key: ")
 
 		# get Crypto object
-		crypto=Crypto(self.crypted_key,self.crypted_secret,password="password",salt=self.salt)
+		crypto=Crypto(crypted_key_secret=self.crypted_key_secret,password="password",salt=self.salt)
 
 		# attempt decryption; display error and exit upon any failure
 		# most likely failure is incorrect password
@@ -259,8 +259,9 @@ class ParkingValidator(tk.Frame):
 
 		# load REST API config values
 		self.rest_api_url=config['sierra rest api']['url']
-		self.crypted_key=config['sierra rest api']['crypted_key'].encode('utf-8')
-		self.crypted_secret=config['sierra rest api']['crypted_secret'].encode('utf-8')
+		self.crypted_key_secret=config['sierra rest api']['crypted_key_secret'].encode('utf-8')
+		#self.crypted_key=config['sierra rest api']['crypted_key'].encode('utf-8')
+		#self.crypted_secret=config['sierra rest api']['crypted_secret'].encode('utf-8')
 		self.salt=config['sierra rest api']['salt'].encode('utf-8')
 
 	def maintenance_tick(self):
