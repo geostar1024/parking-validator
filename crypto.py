@@ -68,6 +68,8 @@ class Crypto():
 		"""
 		Generate a random salt, 16 bytes in length by default
 
+		>>> len(c.gensalt())
+		16
 		"""
 		return os.urandom(length)
 
