@@ -19,6 +19,17 @@ class Crypto():
 		self.crypted_secret=crypted_secret
 		self.password=password.encode('utf-8')
 
+		self.setup_fernet(salt=salt)
+
+
+	def setup_fernet(self,salt=None):
+		"""
+		Helper function to set up the Fernet instance
+
+		"""
+
+		if salt is None:
+			salt=self.gensalt()
 		kdf=PBKDF2HMAC(
 			algorithm=hashes.SHA256(),
 			length=32,
@@ -29,7 +40,7 @@ class Crypto():
 		self.key=base64.urlsafe_b64encode(kdf.derive(self.password))
 		self.fernet=Fernet(self.key)
 
-	def encrypt(self,text=None):
+	def encrypt(self,text=None,gensalt=True):
 		"""
 		Encrypt the given text with the `Crypto` object's Fernet instance
 
@@ -52,6 +63,13 @@ class Crypto():
 		b'key:secret'
 		"""
 		return self.fernet.decrypt(self.crypted_key)+b':'+self.fernet.decrypt(self.crypted_secret)
+
+	def gensalt(self,length=16):
+		"""
+		Generate a random salt, 16 bytes in length by default
+
+		"""
+		return os.urandom(length)
 
 if __name__ == "__main__":
 	import doctest
