@@ -53,12 +53,15 @@ class SQLite3Database():
 		self.db_cursor.execute("CREATE TABLE IF NOT EXISTS patrons(id INTEGER PRIMARY KEY, hashed_barcode TEXT unique, blocks TEXT, validations INTEGER, last_validation TIMESTAMP)")
 		self.db.commit()
 
-	def drop_patron_table(self):
+	def drop_patron_table(self,run=False):
 		"""
 		Drops the entire patron table.
 
 		CAUTION: be careful to only run this when intending to clear the patron database
 		"""
+
+		if not run:
+			return
 
 		# possibly the patron table might not exist
 		try:
@@ -146,12 +149,15 @@ class SQLite3Database():
 
 		self.insert_log_entry(self.Logs.PATRONS_RESET.value)
 
-	def drop_log_table(self):
+	def drop_log_table(self,run=False):
 		"""
 		Drop the log table.
 
 		CAUTION: be sure you really want to execute this since it could remove a lot of records!
 		"""
+
+		if not run:
+			return
 
 		self.db_cursor.execute("DROP TABLE log")
 		self.db.commit()

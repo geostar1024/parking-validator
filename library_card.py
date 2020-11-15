@@ -49,15 +49,41 @@ class LibraryCard():
 
 		return self.expiration < dt.datetime.now()
 
-	def has_valid_barcode(self):
+	def has_valid_barcode_length(self):
 		"""
-		Checks if the barcode is minimally valid (has right number of digits).
+		Checks if the barcode has the correct length
+
+		Paremeters
+		----------
+		None
+
+		Returns
+		-------
+		boolean
+
+		Examples
+		--------
+
+		Test card1
+		>>> card1.has_valid_barcode_length()
+		True
+
 		"""
 
 		if self.barcode is None:
 			return False
 
-		return re.match(f'^[0-9]{{{self.barcode_length}}}$',str(self.barcode)) is not None
+		return len(self.barcode)==self.barcode_length
+
+	def has_valid_barcode(self):
+		"""
+		Checks if the barcode is minimally valid (in this case, that it has right number of digits).
+		"""
+
+		if self.barcode is None:
+			return False
+
+		return self.has_valid_barcode_length()
 
 	def has_no_blocks(self):
 		"""
@@ -137,6 +163,7 @@ class PPLibraryCard(LibraryCard):
 				return False
 		return True
 
+
 	def has_valid_barcode(self):
 		"""
 		Checks if the barcode has the correct first 7 digits, and the correct length overall.
@@ -152,6 +179,7 @@ class PPLibraryCard(LibraryCard):
 		Examples
 		--------
 		Test card1
+
 		>>> card1.has_valid_barcode()
 		True
 
