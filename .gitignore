@@ -1,5 +1,8 @@
 __pycache__
 resources
 docs
+reports
 *.pyx
+*.csv
+*.db
 parking_validator.conf

@@ -10,15 +10,16 @@ from enum import Enum
 import toml
 import getpass
 import time
-#import configparser
+import calendar
 
-from validator_interface import Header,LabeledBox,LabeledSplitBox,KeyInput,KeyInput2,TimerClock,ValidatorClock
+from validator_interface import Header,LabeledBox,LabeledSplitBox,KeyInput2,ValidatorClock
 from library_card import PPLibraryCard
 from patron import Patron
 from database import SQLite3Database
 from rest_api import RestAPI
 from powerusb import PowerUSB
 from crypto import Crypto
+from reports import send_report_email
 
 class ParkingValidator(tk.Frame):
 	"""
@@ -63,6 +64,7 @@ class ParkingValidator(tk.Frame):
 		VALIDATION_SUCCESS="SUCCESS: parking validation successful!\n\nHave a nice day!"
 		ADMIN_MODE="Admin mode active!\n\n[+] to run validation machine.\n\n[-] to reset daily validations for current card.\n\n[*] to exit admin mode."
 		DEBUG_MODE="Debug mode active!\n"
+		EMAIL="WAIT: Monthly statistics being compiled."
 
 		def __str__(self):
 			return self.value
@@ -72,8 +74,8 @@ class ParkingValidator(tk.Frame):
 		Initialize parking validator; top-level object is a tkinter Frame.
 		"""
 		super().__init__(root,**kw)
-		self.version=0.14
-		self.updated=dt.datetime(2020,11,14)
+		self.version=0.15
+		self.updated=dt.datetime(2020,11,15)
 
 		###############################
 		# user-configurable variables #
@@ -83,14 +85,14 @@ class ParkingValidator(tk.Frame):
 		# though, note that the REST API client key and secret are not hardcoded here
 
 		# database file name (will be created if it doesn't exist)
-		self.db_file="parking_validator.db"
+		self.db_file="resources/parking_validator.db"
 
 		# maximum values:
 		# 2 validations per day
 		# 2 hours between validations
 		# 5 consecutive card scan failures
 		# 5 seconds between scan attempts after lockout
-		self.max_validations=2
+		self.max_validations=1
 		self.validation_interval=2*3600
 		self.failures_threshold=5
 		self.lockout_time=5
@@ -99,6 +101,7 @@ class ParkingValidator(tk.Frame):
 		# 24 hours between local database patron clears
 		# 5 seconds between maintenance ticks
 		# 30 seconds between input clears
+		# 20 seconds to insert a ticket (validator run time)
 		self.db_reset_interval=24*3600
 		self.maintenance_interval=5*1000
 		self.scan_interval=30
@@ -108,6 +111,7 @@ class ParkingValidator(tk.Frame):
 		self.admin_barcodes=[]
 		self.debug_barcodes=[]
 
+		# general config values
 		# debug mode enables various extra fields and buttons for testing
 		self.debug_mode=False
 		self.admin_mode=False
@@ -115,19 +119,30 @@ class ParkingValidator(tk.Frame):
 		self.widget_bg="#F3F3F3"
 		self.window_bg="#272727"
 		self.widget_fg="#000"
+		self.screen_width=1366
+		self.screen_height=768
 
 		# REST API values
 		self.rest_api_url=""
 		self.rest_api_key=""
 		self.crypted_key=""
 		self.crypted_secret=""
-		self.salt=""
+		self.api_salt=""
+
+		# email values
+		self.source_email=""
+		self.destination_emails=[""]
+		self.email_password=""
+		self.crypted_email_password=""
+		self.email_salt=""
 
 		# update config values from config file
 		self.load_config()
 
-		# decrypt REST API client key and secret
-		self.decrypt_api_key(root)
+		# decrypt all crypto objects
+		# - REST API client key and secret
+		# - email password
+		self.decrypt_secrets(root)
 
 		###############################
 		# internal instance variables #
@@ -198,7 +213,7 @@ class ParkingValidator(tk.Frame):
 		self.db.create_log_table()
 		if self.db.get_last_reset() is None:
 			# do a reset of the patron table if the log table was empty
-			self.db.insert_reset_entry()
+			self.db.log_reset()
 			self.db.drop_patron_table(run=True)
 
 		# initialize the patron table if it's not there already
@@ -206,9 +221,9 @@ class ParkingValidator(tk.Frame):
 		self.reset_interface()
 		self.maintenance_tick()
 
-	def decrypt_api_key(self,root):
+	def decrypt_secrets(self,root):
 		"""
-		Obtain the REST API encryption password from the user and run decryption.
+		Obtain the encryption password from the user and run decryption.
 
 		"""
 
@@ -216,40 +231,49 @@ class ParkingValidator(tk.Frame):
 		root.withdraw()
 
 		# prompt for the password with echoing turned off
-		password=getpass.getpass("password for REST API key: ")
+		password=getpass.getpass("password for encrypted secrets: ")
 
-		# get Crypto object
-		crypto=Crypto(crypted_key_secret=self.crypted_key_secret,password="password",salt=self.salt)
+		# get Crypto objects
+		crypto_api=Crypto(crypted_key_secret=self.crypted_key_secret,password=password,salt=self.api_salt)
+		crypto_email=Crypto(crypted_key_secret=self.crypted_email_password,password=password,salt=self.email_salt)
 
 		# attempt decryption; display error and exit upon any failure
 		# most likely failure is incorrect password
 		try:
-			self.rest_api_key=crypto.decrypt()
+			self.rest_api_key=crypto_api.decrypt()
 		except:
 			print("Decryption of REST API client key and secret failed!")
+			exit()
+
+		# google and/or the smtp library throws an error if the password is bytes rather than a string
+		try:
+			self.email_password=crypto_email.decrypt().decode()
+		except:
+			print("Decryption of email password failed!")
 			exit()
 
 		# if decryption succeeded, restore the main window
 		root.update()
 		root.deiconify()
 
-	def load_config(self,config_file="parking_validator.conf"):
+	def load_config(self,config_file="resources/parking_validator.conf"):
 		"""
 		Loads configuration settings.
 		"""
 
 		config=toml.load(config_file)
 
-
 		# load validation config values
 		self.max_validations=int(config['validation']['max validations per day'])
 		self.validation_interval=int(config['validation']['hours between validations']*3600)
 		self.scan_interval=int(config['validation']['interface timeout in seconds'])
-		self.validate_interval=int(config['validation']['validate timeout in seconds'])
+		self.validate_interval=int(config['validation']['validator timeout in seconds'])
 
 		# load general config values
 		self.maintenance_interval=int(config['general']['maintenance interval in seconds']*1000)
 		self.fullscreen=config['general']['fullscreen']
+		self.screen_width=config['general']['window width']
+		self.screen_height=config['general']['window height']
 		self.widget_bg=config['general']['widget background color']
 		self.window_bg=config['general']['window background color']
 		self.widget_fg=config['general']['widget text color']
@@ -273,40 +297,84 @@ class ParkingValidator(tk.Frame):
 		# load REST API config values
 		self.rest_api_url=config['sierra rest api']['url']
 		self.crypted_key_secret=config['sierra rest api']['crypted_key_secret'].encode('utf-8')
-		#self.crypted_key=config['sierra rest api']['crypted_key'].encode('utf-8')
-		#self.crypted_secret=config['sierra rest api']['crypted_secret'].encode('utf-8')
-		self.salt=config['sierra rest api']['salt'].encode('utf-8')
+		self.api_salt=config['sierra rest api']['salt'].encode('utf-8')
+
+		# load reports config values
+		self.source_email=config['reports']['email address to send reports from']
+		self.destination_emails=config['reports']['email addresses to send reports to']
+		self.crypted_email_password=config['reports']['crypted_email_password'].encode('utf-8')
+		self.email_salt=config['reports']['salt'].encode('utf-8')
 
 	def maintenance_tick(self):
 		"""
 		Runs tasks periodically; interval determined by maintenance_interval above.
 
 		Current tasks:
-			-drop and recreate patron table every day
-			-reset UI every so often for security
+
+		- drop and recreate patron table every day
+		- reset UI every so often for security
+		- compute histograms for last month's data and email a report
 		"""
 
+		current_datetime=dt.datetime.now()
+
 		# drop and recreate patron table when enough time has elapsed; disabled if interval is zero
-		if (dt.datetime.now()-self.db.get_last_reset()).total_seconds()>self.db_reset_interval and self.db_reset_interval>0:
+		if (current_datetime-self.db.get_last_reset()).total_seconds()>self.db_reset_interval and self.db_reset_interval>0:
 			self.db.drop_patron_table()
 			self.db.create_patron_table()
-			self.db.insert_reset_entry()
+			self.db.log_reset()
 
 		# reset the interface for security every so often
 		# the interval should be long enough for a patron to reasonably complete validation after scanning a card
 
-		if (dt.datetime.now()-self.last_scan_time).total_seconds()>self.scan_interval:
+		if (current_datetime-self.last_scan_time).total_seconds()>self.scan_interval:
 
 			# disable debug/admin mode after timeout
 			self.debug_mode_off()
 			self.reset_interface()
-			self.last_scan_time=dt.datetime.now()
+			self.last_scan_time=current_datetime
+
+		# after the first minute on the first day of the month, make the report for last month
+		# this should occur just after midnight
+		if (current_datetime.day==15 and current_datetime.hour==21 and current_datetime.minute==8 and current_datetime.second<30):
+
+			# update the status just in case someone is about to try to do a validation
+			self.status_text_var.set(ParkingValidator.Messages.EMAIL.value)
+			self.canvas.update()
+
+			# figure out what last month was
+			last_month=current_datetime-dt.timedelta(days=1)
+			last_day=calendar.monthrange(last_month.year,last_month.month)[1]
+
+			# compute date range for previous month
+			date2=dt.datetime(last_month.year,last_month.month,last_day)+dt.timedelta(days=1)
+			date1=dt.datetime(last_month.year,last_month.month,1)
+
+			# compute statistics
+			validations,validations_file=self.db.hist_between(date1=date1,date2=date2,data_type="validation")
+			failures,failures_file=self.db.hist_between(date1=date1,date2=date2,data_type="failed")
+			admin,admin_file=self.db.hist_between(date1=date1,date2=date2,data_type="admin")
+
+			# attachments for the email
+			attachments=[validations_file,failures_file,admin_file]
+
+			# finally we have enough information to construct the email
+			send_report_email(validations,failures,admin,date1,date2,self.source_email,self.destination_emails,self.email_password, attachments)
+
+			# prevent this from triggering again until next month
+			# this locks the main thread, but it should be fine as it should occur in the middle of the night
+			time.sleep(30)
+
+			self.reset_interface()
 
 		self.after(self.maintenance_interval,self.maintenance_tick)
+
 
 	def create_widgets(self):
 		"""
 		Create all UI elements.
+
+		TODO: clean this up a lot and add more comments
 		"""
 
 		gutter=30
@@ -316,14 +384,17 @@ class ParkingValidator(tk.Frame):
 			width=int(self.winfo_toplevel().winfo_screenwidth()/(self.title_font[1]-1.75))
 
 		# toplevel canvas element to contain rounded-corner
-		screen_width=1366
-		screen_height=768
-		self.canvas=tk.Canvas(root,bg=self.window_bg,relief=tk.FLAT,bd=0, highlightthickness=0, width=screen_width,height=screen_height)
+		self.canvas=tk.Canvas(root,bg=self.window_bg,relief=tk.FLAT,bd=0, highlightthickness=0, width=self.screen_width,height=self.screen_height)
 		self.canvas.grid(sticky="NSEW")
 
 
-
 		def round_rectangle(x, y, width, height, radius=radius, **kwargs):
+			"""
+			Helper function for drawing rectangles with rounded corners on a canvas object
+
+			Returns a canvas polygon object
+
+			"""
 			x1=x
 			y1=y
 			x2=x+width
@@ -352,29 +423,38 @@ class ParkingValidator(tk.Frame):
 
 			return self.canvas.create_polygon(points, **kwargs, smooth=True)
 
+		# load the logo
 		self.logo_image=tk.PhotoImage(file='resources/logo.png')
 		self.logo_image=self.logo_image.subsample(2)
 
 		# section dimensions
-		column_width=int((screen_width-3*gutter)/2)
+		column_width=int((self.screen_width-3*gutter)/2)
 		card_height=320
-		status_height=screen_height-3*gutter-card_height
-		info_height=screen_height-2*gutter
+		status_height=self.screen_height-3*gutter-card_height
+		info_height=self.screen_height-2*gutter
 
 		# create section rectangles
 		self.card_section=round_rectangle(gutter,gutter,column_width,card_height, fill=self.widget_bg)
 		self.status_section=round_rectangle(gutter,gutter*2+card_height,column_width,status_height, fill=self.widget_bg)
-		self.info_section=round_rectangle(gutter*2+column_width,gutter,column_width,screen_height-2*gutter, fill=self.widget_bg)
+		self.info_section=round_rectangle(gutter*2+column_width,gutter,column_width,self.screen_height-2*gutter, fill=self.widget_bg)
 
-		# card section
+		### card section
 		self.logo=self.canvas.create_image(column_width/2+gutter,gutter+radius, image=self.logo_image,anchor="n")
 
+		# card label (welcome text)
 		self.card_text_var=tk.StringVar()
 		self.card_text_var.set("Welcome.\n\nPlease scan your Princeton Public Library card,\nor enter your 14-digit barcode.")
 		self.card_text_label=tk.Label(root,textvariable=self.card_text_var,bg=self.widget_bg, wraplength=column_width-2*radius,justify=tk.LEFT,font=self.default_font)
 		self.card_text=self.canvas.create_window(gutter+radius,gutter+radius+80,anchor="nw", width=column_width-2*radius,window=self.card_text_label)
 
-		self.status_title=self.canvas.create_text(gutter+radius,gutter*2+radius+card_height,text="Status Messages",font=self.default_font,anchor="nw")
+		# widget that has the keybindings; can effectively be typed in
+		self.input_field=KeyInput2(root,callback=self.validate_barcode,keybinds=self.keybinds, font=('Helvetica',40),max_length=PPLibraryCard().barcode_length)
+		self.input_field_canvas=self.canvas.create_window(gutter+column_width/2,gutter+radius+190, window=self.input_field, anchor="n")
+
+
+		### help/info section
+		# lots of info text here, broken up into blocks according to formatting requirements
+		# could be replaced with an HTML-parsing widget from an external package if more complex formatting is needed
 
 		self.info_text_1=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius,text="Parking Validation Instructions",font=('Helvetica',20,'bold'),anchor="nw")
 
@@ -382,12 +462,14 @@ class ParkingValidator(tk.Frame):
 
 		self.info_text_3=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+80,text=f"1. Scan your Princeton Public Library card or enter your 14-digit barcode.\n\n2. If your library card is valid, the screen will say to press \"+\" (plus sign). Have your parking ticket ready before pressing the button. (If the card is invalid, you will receive an error message telling you why. Please see a staff member at the Checkout Desk.)\n\n3. Please wait a moment for the \"insert ticket\" instruction to appear.\n\n4. Insert your ticket for validation. You will have {self.validate_interval} seconds, indicated by the timer.\n\n5. Retrieve validated ticket. There should be a third barcode printed in the middle.\n\n6. Insert the ticket in one of the pay machines in the Spring Street Garage before you go to your car, to make sure the two hours were credited. For further help, see below.",font=('Helvetica',12),anchor="nw",width=column_width-2*radius)
 
-		self.info_text_4=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+380, text="Things to Know",font=('Helvetica',15,'bold'),anchor="nw")
+		self.info_text_4=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+400, text="Things to Know",font=('Helvetica',15,'bold'),anchor="nw")
 
-		self.info_text_5=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+410,text="● Validation gives Princeton Public Library cardholders one two-hour session of free parking per day in the Spring Street Garage, during library hours.\n\n● It does not matter when you validate. The stamp credits two hours from the time on the ticket.\n\n● Parking is free for anyone who is in and out of the garage within 30 minutes.\n\n● If a pay machine says you owe money when you shouldn’t, it didn’t read the stamped barcode. Try inserting the ticket a couple more times. If you still have trouble, please visit the Customer Service Office on the Spring Street side of the garage.",font=('Helvetica',12),anchor="nw",width=column_width-2*radius)
+		self.info_text_5=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+430,text="● Validation gives Princeton Public Library cardholders one two-hour session of free parking per day in the Spring Street Garage, during library hours.\n\n● It does not matter when you validate. The stamp credits two hours from the time on the ticket.\n\n● Parking is free for anyone who is in and out of the garage within 30 minutes.\n\n● If a pay machine says you owe money when you shouldn’t, it didn’t read the stamped barcode. Try inserting the ticket a couple more times. If you still have trouble, please visit the Customer Service Office on the Spring Street side of the garage.",font=('Helvetica',12),anchor="nw",width=column_width-2*radius)
 
-		# status section
+		### status section
+		self.status_title=self.canvas.create_text(gutter+radius,gutter*2+radius+card_height,text="Status Messages",font=self.default_font,anchor="nw")
 
+		# displays the last few digits of a valid barcode
 		self.status_patron_var=tk.StringVar()
 		self.status_patron_label=tk.Label(root,textvariable=self.status_patron_var,bg=self.widget_bg,wraplength=column_width-2*radius,justify=tk.LEFT,anchor="nw",font=('Helvetica',20,'bold'))
 		self.status_patron=self.canvas.create_window(gutter+radius,gutter*2+radius+card_height+30,anchor="nw", width=column_width-2*radius,window=self.status_patron_label)
@@ -395,14 +477,8 @@ class ParkingValidator(tk.Frame):
 		# status text
 		self.status_text_var=tk.StringVar()
 		self.status_text_label=tk.Label(root,textvariable=self.status_text_var,bg=self.widget_bg,wraplength=column_width-2*radius,justify=tk.LEFT,anchor="nw",font=('Helvetica',20,'bold'))
-
 		self.status_text_var.set(ParkingValidator.Messages.SCAN_CARD)
-
 		self.status_text=self.canvas.create_window(gutter+radius,gutter*2+radius+card_height+80,anchor="nw", width=column_width-2*radius,window=self.status_text_label)
-
-		#self.card_input_var=tk.StringVar()
-		#self.card_input_entry=tk.Entry(root,textvariable=self.card_input_var, command=self.validate_barcode,keybinds=self.keybinds,exportselection=0)
-		#self.card_input=canvas.create_window(gutter+radius,gutter+radius+160,anchor="nw", width=column_width-2*radius,window=self.card_input_entry)
 
 		# set window title
 		self.winfo_toplevel().title(ParkingValidator.Messages.TITLE.value)
@@ -410,6 +486,7 @@ class ParkingValidator(tk.Frame):
 
 		# setup validator timer
 		# note that this widget controls the powerusb device directly and manipulates the status box, and hence needs references to both
+		# by default, it is hidden at startup
 		self.validator_clock=ValidatorClock(root,label_font=('Helvetica',20,'bold'),label_bg=self.widget_bg,font=self.default_font,bg=self.widget_bg,relief=tk.FLAT,borderwidth=0,amount=1, powerusb=self.powerusb, status_var=self.status_text_var,status_start=ParkingValidator.Messages.INSERT_TICKET,status_end=ParkingValidator.Messages.VALIDATION_SUCCESS)
 		self.validator=self.canvas.create_window(gutter+column_width-120,gutter*2+radius+card_height,anchor="nw",width=100,window=self.validator_clock)
 		self.validator_clock.canvas=self.canvas
@@ -417,53 +494,29 @@ class ParkingValidator(tk.Frame):
 		self.validator_clock.hide()
 
 
-		# title/header section
-
-		#self.title=Header(root,f"{ParkingValidator.Messages.TITLE.value} ({ParkingValidator.Messages.ABBREVIATION.value})",font=self.title_font, label_font=self.default_font,width=width,**self.default_style_kw)
-		#self.title.grid(row=0,columnspan=2,**self.default_geom_kw)
-
-		# widget that has the keybindings; can effectively be typed in
-		self.input_field=KeyInput2(root,callback=self.validate_barcode,keybinds=self.keybinds, font=('Helvetica',40),max_length=PPLibraryCard().barcode_length)
-		#if self.debug_mode:
-
-		self.input_field_canvas=self.canvas.create_window(gutter+column_width/2,gutter+radius+190, window=self.input_field, anchor="n")
-		#self.input_field.grid(row=2,column=0,**self.default_geom_kw)
+		### debug items
+		# only visible in debug mode
 
 		# displays the last valid barcode
-		#self.barcode_display_var=tk.StringVar()
 		self.barcode_display = LabeledBox(root,title="Last valid barcode",text="<none>",font=self.default_font,**self.default_style_kw)
-		self.barcode_display_canvas=self.canvas.create_window(gutter+column_width-200,screen_height-gutter-radius-40,anchor="nw",window=self.barcode_display)
-		#self.barcode_display_var.set("<none>")
+		self.barcode_display_canvas=self.canvas.create_window(gutter+column_width-200,self.screen_height-gutter-radius-40,anchor="nw",window=self.barcode_display)
 		self.canvas.itemconfig(self.barcode_display_canvas,state="hidden")
-		#if self.debug_mode:
-		#self.barcode_display.grid(row=2,column=1,**self.default_geom_kw)
 
 		# displays patron information (merge of local and remote databases)
-		#self.patron_display_left_var=tk.StringVar()
-		#self.patron_display_right_var=tk.StringVar()
 		self.patron_display=LabeledSplitBox(root,title="Patron Information",text_left="",text_right="",font=self.default_font, **self.default_style_kw)
 		self.patron_display_canvas=self.canvas.create_window(gutter+radius,gutter*2+radius+card_height+120,anchor="nw", width=column_width-2*radius,window=self.patron_display)
 		self.canvas.itemconfig(self.patron_display_canvas,state="hidden")
-		#self.patron_display_right_var.set("")
-		#self.patron_display_left_var.set("")
-		#self.patron_display.grid(row=3,column=0,columnspan=2,**self.default_geom_kw)
-
-		# displays status messages/errors
-		#self.status=LabeledBox(root,title="Status",text=ParkingValidator.ErrorMsgs.NO_ERROR, font=self.default_font,**self.default_style_kw)
-		#self.status.grid(row=4,column=0,columnspan=2,**self.default_geom_kw)
 
 		# proxy for validation machine
+		# this control is always hidden, but can be accessed by button press in admin mode or for validation
 		self.validator_button=tk.Button(root,text="run machine [+]",command=self.do_validation)
-		#if self.debug_mode or self.admin_mode:
-		#self.validator_button.grid(row=5,column=1,**self.default_geom_kw)
 
 		# admin override to reset validation count
+		# this control is always hidden, but can be accessed by button press in admin mode
 		self.reset_validation_button=tk.Button(root,text="admin reset [-]",command=self.reset_validation)
-		#if self.debug_mode or self.admin_mode:
-		#self.reset_validation_button.grid(row=5,column=0,**self.default_geom_kw)
 
 		# version information
-		self.footer_text=self.canvas.create_text(gutter+radius,screen_height-gutter-radius,text=f"{ParkingValidator.Messages.ABBREVIATION.value} version {self.version}; last updated {self.updated:%Y-%m-%d}",font=('Helvetica',10,'italic'),anchor="nw")
+		self.footer_text=self.canvas.create_text(gutter+radius,self.screen_height-gutter-radius,text=f"{ParkingValidator.Messages.ABBREVIATION.value} version {self.version}; last updated {self.updated:%Y-%m-%d}",font=('Helvetica',10,'italic'),anchor="nw")
 
 
 	def debug_mode_on(self):
@@ -512,6 +565,7 @@ class ParkingValidator(tk.Frame):
 		self.consecutive_failures=0
 		self.admin_mode=True
 		self.validator_button_on()
+		self.db.log_admin()
 		#self.reset_validation_button.grid()
 		self.status_text_var.set(ParkingValidator.Messages.ADMIN_MODE)
 
@@ -572,8 +626,7 @@ class ParkingValidator(tk.Frame):
 
 		self.status_text_var.set(ParkingValidator.Messages.SCAN_CARD)
 		self.status_patron_var.set("")
-		#self.patron_display.text_left(ParkingValidator.Messages.SCAN_CARD)
-		#self.patron_display.text_right("")
+		self.canvas.update()
 
 	def admin_quit(self,event):
 		"""
@@ -726,7 +779,7 @@ class ParkingValidator(tk.Frame):
 			self.db.do_patron_validation(self.patron)
 
 			# display the updated patron object
-			#self.patron_display.text(self.patron.list_properties())
+			self.patron_display.text(self.patron.list_properties())
 
 			# turn on the validator clock, which controls the powerusb outlet itself
 			# note that this runs in its own thread and doesn't block the main thread since it's a separate widget
@@ -777,6 +830,11 @@ class ParkingValidator(tk.Frame):
 		if selector == "COMM_ERROR":
 			self.status_text_var.set(ParkingValidator.ErrorMsgs.COMM_ERROR)
 			return
+
+		# log that a failure occurred, for later statistical analysis
+		# note that this excludes malformed barcodes
+		self.db.log_fail()
+
 		if self.patron is None:
 			# patron/card doesn't exist; return immediately
 			self.status_text_var.set(ParkingValidator.ErrorMsgs.NONEXISTENT_CARD)
@@ -835,7 +893,6 @@ class ParkingValidator(tk.Frame):
 if __name__ == '__main__':
 	root = tk.Tk()
 	app = ParkingValidator(root)
-	#app.config(bg='#272727')
 
 	# change the icon in the titlebar
 	root.tk.call('wm', 'iconphoto', root._w, tk.PhotoImage(file='resources/LibReader2014.png'))

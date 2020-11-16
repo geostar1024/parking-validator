@@ -2,6 +2,8 @@ import datetime as dt
 from enum import Enum
 import sqlite3
 import hashlib
+import csv
+import numpy as np
 
 class SQLite3Database():
 	"""
@@ -26,9 +28,10 @@ class SQLite3Database():
 		Predefined log strings, intended for log table.
 		"""
 
-		PATRONS_RESET="patron database reset"
-		VALIDATION_SUCCESS="validation success"
-		ADMIN_MODE="admin mode activated"
+		PATRONS_RESET="patron db reset"
+		VALIDATION_SUCCESS="success"
+		ADMIN_MODE="admin on"
+		VALIDATION_FAIL="fail"
 
 	def open_db(self):
 		"""
@@ -116,7 +119,7 @@ class SQLite3Database():
 		"""
 
 		self.db_cursor.execute("UPDATE patrons SET validations = ?, last_validation = ? WHERE hashed_barcode = ?",(patron.validations, patron.last_validation, patron.card.hashed_barcode))
-		self.insert_validation_entry()
+		self.log_validation()
 		self.db.commit()
 
 	def create_log_table(self):
@@ -127,27 +130,50 @@ class SQLite3Database():
 		self.db_cursor.execute("CREATE TABLE IF NOT EXISTS log(id INTEGER PRIMARY KEY, datetime TIMESTAMP unique, comment TEXT)")
 		self.db.commit()
 
-	def insert_log_entry(self,comment):
+	def log_entry_at_time(self,timestamp,comment):
+		"""
+		Inserts the specified comment with the specified timestamp into the log table.
+
+		Timestamp should be standard datetime object.
+		"""
+
+		self.db_cursor.execute("INSERT INTO log(datetime,comment) VALUES (?,?)",(timestamp,comment))
+		self.db.commit()
+
+	def log_entry(self,comment):
 		"""
 		Inserts the specified comment with the current timestamp into the log table.
 		"""
 
-		self.db_cursor.execute("INSERT INTO log(datetime,comment) VALUES (?,?)",(dt.datetime.now(),comment))
-		self.db.commit()
+		self.log_entry_at_time(dt.datetime.now(),comment)
 
-	def insert_validation_entry(self):
+	def log_validation(self):
 		"""
 		Inserts a validation entry into the log table (shortcut method).
 		"""
 
-		self.insert_log_entry(self.Logs.VALIDATION_SUCCESS.value)
+		self.log_entry(self.Logs.VALIDATION_SUCCESS.value)
 
-	def insert_reset_entry(self):
+	def log_reset(self):
 		"""
 		Inserts a patron database reset entry into the log table (shortcut method).
 		"""
 
-		self.insert_log_entry(self.Logs.PATRONS_RESET.value)
+		self.log_entry(self.Logs.PATRONS_RESET.value)
+
+	def log_admin(self):
+		"""
+		Inserts an admin mode active entry into the log table (shortcut method).
+		"""
+
+		self.log_entry(self.Logs.ADMIN_MODE.value)
+
+	def log_fail(self):
+		"""
+		Inserts a validation failed entry into the log table (shortcut method).
+		"""
+
+		self.log_entry(self.Logs.VALIDATION_FAIL.value)
 
 	def drop_log_table(self,run=False):
 		"""
@@ -159,8 +185,11 @@ class SQLite3Database():
 		if not run:
 			return
 
-		self.db_cursor.execute("DROP TABLE log")
-		self.db.commit()
+		try:
+			self.db_cursor.execute("DROP TABLE log")
+			self.db.commit()
+		except:
+			print("table doesn't exist!")
 
 	def get_log_size(self):
 		"""
@@ -177,12 +206,29 @@ class SQLite3Database():
 		Note: could be None if no entry exists (if the table was just made)
 		"""
 
-		self.db_cursor.execute("SELECT datetime from log where comment = ? order by datetime desc",(self.Logs.PATRONS_RESET.value,))
+		self.db_cursor.execute("SELECT datetime from log where comment = ? order by datetime desc",(SQLite3Database.Logs.PATRONS_RESET.value,))
 		reset=self.db_cursor.fetchone()
 		if reset is None:
 			return None
 		else:
 			return reset[0]
+
+	def get_data_type_between(self,datetime1,datetime2,data_type=None):
+		"""
+		Get all the entries of the specified type between the specified timestamps.
+
+		Returns a list of datetime.datetime objects
+		"""
+
+		if data_type is None:
+			data_type=SQLite3Database.Logs.VALIDATION_SUCCESS.value
+
+		self.db_cursor.execute("SELECT datetime FROM log where comment = ? AND datetime BETWEEN ? AND ?",(data_type,datetime1,datetime2))
+		records=[]
+		for record in self.db_cursor.fetchall():
+			records.append(record[0])
+		return records
+
 
 	def get_num_validations_between(self,datetime1,datetime2):
 		"""
@@ -191,7 +237,7 @@ class SQLite3Database():
 		Returns an integer
 		"""
 
-		self.db_cursor.execute("SELECT Count(*) FROM log where comment = ? AND datetime BETWEEEN ? AND ?",(self.Logs.VALIDATION_SUCCESS.value,datetime1,datetime2))
+		self.db_cursor.execute("SELECT Count(*) FROM log where comment = ? AND datetime BETWEEEN ? AND ?",(SQLite3Database.Logs.VALIDATION_SUCCESS.value,datetime1,datetime2))
 		return int(self.db_cursor.fetchone()[0])
 
 	def get_validations_between(self,datetime1,datetime2):
@@ -201,11 +247,25 @@ class SQLite3Database():
 		Returns a list of datetime.datetime objects
 		"""
 
-		self.db_cursor.execute("SELECT datetime FROM log where comment = ? AND datetime BETWEEN ? AND ?",(self.Logs.VALIDATION_SUCCESS.value,datetime1,datetime2))
-		validations=[]
-		for validation in self.db_cursor.fetchall():
-			validations.append(validation[0])
-		return validations
+		return self.get_data_type_between(datetime1,datetime2,data_type=SQLite3Database.Logs.VALIDATION_SUCCESS.value)
+
+	def get_failed_between(self,datetime1,datetime2):
+		"""
+		Get all the failed entries between the specified timestamps.
+
+		Returns a list of datetime.datetime objects
+		"""
+
+		return self.get_data_type_between(datetime1,datetime2,data_type=SQLite3Database.Logs.VALIDATION_FAIL.value)
+
+	def get_admin_between(self,datetime1,datetime2):
+		"""
+		Get all the admin entries between the specified timestamps.
+
+		Returns a list of datetime.datetime objects
+		"""
+
+		return self.get_data_type_between(datetime1,datetime2,data_type=SQLite3Database.Logs.ADMIN_MODE.value)
 
 	def get_num_validations_since(self,datetime):
 		"""
@@ -242,3 +302,53 @@ class SQLite3Database():
 		"""
 
 		return self.get_validations_since(self.get_last_reset())
+
+	def hist_between(self,date1=dt.datetime(2020,11,1),date2=dt.datetime(2020,12,1),data_type="validation",start_hour=6,end_hour=21):
+		"""
+		Generates CSV file with one histogram per line, in the reports directory (hardcoded to "reports" for now)
+
+		Histogram is of specified data for a given day between the specified starting and ending hours
+
+		Data range is between the two input dates, not including the end date
+
+		Returns the total number of instances of the specified data as well as the filename
+
+		"""
+		days=(date2-date1).days
+		total=0
+
+		csv_file=f"reports/{data_type}-{date1:%Y-%m-%d}-to-{date2-dt.timedelta(days=1):%Y-%m-%d}.csv"
+		with open(csv_file,"w+",newline='') as fpw:
+			csvwriter=csv.writer(fpw,delimiter=',')
+			csvwriter.writerow(["day\\hour"]+list(range(start_hour,end_hour)))
+
+			for day in range(0,days):
+				start_date=date1+dt.timedelta(days=day)
+				end_date=date1+dt.timedelta(days=day+1)
+
+				#print(start_date,end_date)
+
+				# get data from database
+				if data_type=="validation":
+					data=self.get_validations_between(start_date,end_date)
+				elif data_type=="admin":
+					data=self.get_admin_between(start_date,end_date)
+				else:
+					data=self.get_failed_between(start_date,end_date)
+
+				# keep track of the total entries
+				total+=len(data)
+
+				# extract hour
+				hours=np.zeros(len(data))
+
+				for k,entry in enumerate(data):
+					hours[k]=entry.hour
+
+				# returns frequencies and bin edges
+				hist=np.histogram(hours,range(start_hour,end_hour+1))
+
+				# write line to csv file
+				csvwriter.writerow([start_date.strftime("%Y-%m-%d")]+list(hist[0]))
+
+		return total,csv_file
