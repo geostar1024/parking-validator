@@ -81,8 +81,11 @@ def gen_token(update_config=False):
 
 	"""
 
+	print("This will generate a new salt and encrypted token, and update the config file.\nYou will be prompted for the password first.\n")
+
 	salt=base64.urlsafe_b64encode(Crypto.gen_salt(Crypto))
 	password=getpass.getpass("password for encryption: ")
+	print("\nIf encrypting new API key, format is <api_key>:<client_secret>\n")
 	crypto=Crypto(password=password,salt=salt)
 	crypto.crypted_key_secret=crypto.encrypt()
 	try:

@@ -196,6 +196,30 @@ class ValidatorClock(TimerClock):
 		self.status_var.set(self.status_end)
 		self.powerusb.off()
 
+class TouchlessClock(TimerClock):
+	def __init__(self,parent,status_var=None,status_start="",status_end="",touchless_callback=None,**kw):
+		super().__init__(parent,**kw)
+		self.status_var=status_var
+		self.status_start=status_start
+		self.status_end=status_end
+		self.touchless_callback=touchless_callback
+
+	def show(self):
+		if self.canvas_id is None or self.canvas is None:
+			return
+
+		self.canvas.itemconfig(self.canvas_id,state="normal")
+		self.status_var.set(self.status_start)
+
+	def hide(self):
+		if self.canvas_id is None or self.canvas is None:
+			return
+
+		self.canvas.itemconfig(self.canvas_id,state="hidden")
+		self.status_var.set(self.status_end)
+		self.touchless_callback()
+
+
 
 
 class KeyInput(LabeledBox):

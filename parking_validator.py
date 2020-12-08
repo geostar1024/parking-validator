@@ -12,7 +12,7 @@ import getpass
 import time
 import calendar
 
-from validator_interface import Header,LabeledBox,LabeledSplitBox,KeyInput2,ValidatorClock
+from validator_interface import Header,LabeledBox,LabeledSplitBox,KeyInput2,ValidatorClock,TouchlessClock
 from library_card import PPLibraryCard
 from patron import Patron
 from database import SQLite3Database
@@ -59,12 +59,61 @@ class ParkingValidator(tk.Frame):
 		ABBREVIATION="PPLPVS"
 		SCAN_CARD="READY: Please scan card."
 		BLANK="\n\n\n\n"
-		VALIDATION_ALLOWED="SUCCESS: valid patron account detected!\n\nPress [+] to validate."
+		SUCCESS="SUCCESS:"
+		VALID_ACCOUNT="Valid patron account detected!"
+		VALIDATION_ALLOWED=f"{SUCCESS} {VALID_ACCOUNT}\n\nPress [+] to validate."
+		VALIDATION_AUTO=f"{SUCCESS} {VALID_ACCOUNT}\n\nValidator will be turned on in a few seconds."
 		INSERT_TICKET="Validation process started.\n\nPlease insert ticket into validation machine."
-		VALIDATION_SUCCESS="SUCCESS: parking validation successful!\n\nHave a nice day!"
+		VALIDATION_SUCCESS=f"{SUCCESS} Parking validation successful!\n\nHave a nice day!"
 		ADMIN_MODE="Admin mode active!\n\n[+] to run validation machine.\n\n[-] to reset daily validations for current card.\n\n[*] to exit admin mode."
 		DEBUG_MODE="Debug mode active!\n"
 		EMAIL="WAIT: Monthly statistics being compiled."
+
+		def __str__(self):
+			return self.value
+
+	class Instructions(Enum):
+		"""
+		Predefined instruction strings, for instructions panel.
+		"""
+
+		SCAN_CARD="Scan your Princeton Public Library card or enter your 14-digit barcode."
+		PRESS_BUTTON="If your library card is valid, the screen will say to press \"+\" (plus sign). Have your parking ticket ready before pressing the button. (If the card is invalid, you will receive an error message telling you why. Please see a staff member at the Checkout Desk.)"
+		TOUCHLESS="If your library card is valid, the screen will tell you to wait a moment for the \"insert ticket\" instruction to appear. (If the card is invalid, you will receive an error message telling you why. Please see a staff member at the Checkout Desk.)"
+		WAIT_FOR_VALIDATOR="Please wait a moment for the \"insert ticket\" instruction to appear."
+		INSERT_TICKET="Insert your ticket for validation. You will have {self.validate_interval} seconds, indicated by the timer."
+		RETRIEVE_TICKET="Retrieve validated ticket. There should be a third barcode printed in the middle."
+		USE_VALIDATED_TICKET="Insert the ticket in one of the pay machines in the Spring Street Garage before you go to your car, to make sure the two hours were credited. For further help, see below."
+		THINGS_TO_KNOW="● Validation gives Princeton Public Library cardholders one two-hour session of free parking per day in the Spring Street Garage, during library hours.\n\n● It does not matter when you validate. The stamp credits two hours from the time on the ticket.\n\n● Parking is free for anyone who is in and out of the garage within 30 minutes.\n\n● If a pay machine says you owe money when you shouldn’t, it didn’t read the stamped barcode. Try inserting the ticket a couple more times. If you still have trouble, please visit the Customer Service Office on the Spring Street side of the garage."
+		NORMAL_INSTRUCTIONS="".join([f"{k+1}. {x}\n\n" for k,x in enumerate([
+			SCAN_CARD,
+			PRESS_BUTTON,
+			WAIT_FOR_VALIDATOR,
+			INSERT_TICKET,
+			RETRIEVE_TICKET,
+			USE_VALIDATED_TICKET
+		])])[:-2]
+		TOUCHLESS_INSTRUCTIONS="".join([f"{k+1}. {x}\n\n" for k,x in enumerate([
+			SCAN_CARD,
+			TOUCHLESS,
+			INSERT_TICKET,
+			RETRIEVE_TICKET,
+			USE_VALIDATED_TICKET
+		])])[:-2]
+
+		def __str__(self):
+			return self.value
+
+	class Titles(Enum):
+		"""
+		Predefined title strings.
+		"""
+
+		WELCOME="Welcome.\n\nPlease scan your Princeton Public Library card,\nor enter your 14-digit barcode."
+		HOW_TO_VALIDATE="How to Validate Your Ticket for the Spring Street Garage"
+		THINGS_TO_KNOW="Things to Know"
+		VALIDATOR_INSTRUCTIONS="Parking Validation Instructions"
+		STATUS_MESSAGES="Status Messages"
 
 		def __str__(self):
 			return self.value
@@ -74,8 +123,8 @@ class ParkingValidator(tk.Frame):
 		Initialize parking validator; top-level object is a tkinter Frame.
 		"""
 		super().__init__(root,**kw)
-		self.version=0.15
-		self.updated=dt.datetime(2020,11,15)
+		self.version=0.16
+		self.updated=dt.datetime(2020,12,7)
 
 		###############################
 		# user-configurable variables #
@@ -106,6 +155,9 @@ class ParkingValidator(tk.Frame):
 		self.maintenance_interval=5*1000
 		self.scan_interval=30
 		self.validate_interval=20
+
+		# if zero, a key must be pressed to turn on validator, otherwise the specified delay in seconds is used
+		self.touchless_interval=0
 
 		# admin and debug barcodes; none by default
 		self.admin_barcodes=[]
@@ -268,6 +320,7 @@ class ParkingValidator(tk.Frame):
 		self.validation_interval=int(config['validation']['hours between validations']*3600)
 		self.scan_interval=int(config['validation']['interface timeout in seconds'])
 		self.validate_interval=int(config['validation']['validator timeout in seconds'])
+		self.touchless_interval=int(config['validation']['touchless validation delay'])
 
 		# load general config values
 		self.maintenance_interval=int(config['general']['maintenance interval in seconds']*1000)
@@ -339,7 +392,7 @@ class ParkingValidator(tk.Frame):
 		if (current_datetime.day==15 and current_datetime.hour==21 and current_datetime.minute==8 and current_datetime.second<30):
 
 			# update the status just in case someone is about to try to do a validation
-			self.status_text_var.set(ParkingValidator.Messages.EMAIL.value)
+			self.status_text_var.set(ParkingValidator.Messages.EMAIL)
 			self.canvas.update()
 
 			# figure out what last month was
@@ -443,7 +496,7 @@ class ParkingValidator(tk.Frame):
 
 		# card label (welcome text)
 		self.card_text_var=tk.StringVar()
-		self.card_text_var.set("Welcome.\n\nPlease scan your Princeton Public Library card,\nor enter your 14-digit barcode.")
+		self.card_text_var.set(ParkingValidator.Titles.WELCOME)
 		self.card_text_label=tk.Label(root,textvariable=self.card_text_var,bg=self.widget_bg, wraplength=column_width-2*radius,justify=tk.LEFT,font=self.default_font)
 		self.card_text=self.canvas.create_window(gutter+radius,gutter+radius+80,anchor="nw", width=column_width-2*radius,window=self.card_text_label)
 
@@ -456,18 +509,23 @@ class ParkingValidator(tk.Frame):
 		# lots of info text here, broken up into blocks according to formatting requirements
 		# could be replaced with an HTML-parsing widget from an external package if more complex formatting is needed
 
-		self.info_text_1=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius,text="Parking Validation Instructions",font=('Helvetica',20,'bold'),anchor="nw")
+		self.info_text_1=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius, text=ParkingValidator.Titles.VALIDATOR_INSTRUCTIONS,font=('Helvetica',20,'bold'),anchor="nw")
 
-		self.info_text_2=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+50,text="How to Validate Your Ticket for the Spring Street Garage",font=('Helvetica',15,'bold'),anchor="nw")
+		self.info_text_2=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+50, text=ParkingValidator.Titles.HOW_TO_VALIDATE,font=('Helvetica',15,'bold'),anchor="nw")
 
-		self.info_text_3=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+80,text=f"1. Scan your Princeton Public Library card or enter your 14-digit barcode.\n\n2. If your library card is valid, the screen will say to press \"+\" (plus sign). Have your parking ticket ready before pressing the button. (If the card is invalid, you will receive an error message telling you why. Please see a staff member at the Checkout Desk.)\n\n3. Please wait a moment for the \"insert ticket\" instruction to appear.\n\n4. Insert your ticket for validation. You will have {self.validate_interval} seconds, indicated by the timer.\n\n5. Retrieve validated ticket. There should be a third barcode printed in the middle.\n\n6. Insert the ticket in one of the pay machines in the Spring Street Garage before you go to your car, to make sure the two hours were credited. For further help, see below.",font=('Helvetica',12),anchor="nw",width=column_width-2*radius)
+		instructions_text=ParkingValidator.Instructions.NORMAL_INSTRUCTIONS.value
 
-		self.info_text_4=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+400, text="Things to Know",font=('Helvetica',15,'bold'),anchor="nw")
+		if self.touchless_interval>0:
+			instructions_text=ParkingValidator.Instructions.TOUCHLESS_INSTRUCTIONS.value
 
-		self.info_text_5=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+430,text="● Validation gives Princeton Public Library cardholders one two-hour session of free parking per day in the Spring Street Garage, during library hours.\n\n● It does not matter when you validate. The stamp credits two hours from the time on the ticket.\n\n● Parking is free for anyone who is in and out of the garage within 30 minutes.\n\n● If a pay machine says you owe money when you shouldn’t, it didn’t read the stamped barcode. Try inserting the ticket a couple more times. If you still have trouble, please visit the Customer Service Office on the Spring Street side of the garage.",font=('Helvetica',12),anchor="nw",width=column_width-2*radius)
+		self.info_text_3=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+80, text=instructions_text.replace("{self.validate_interval}",f"{self.validate_interval}"),font=('Helvetica',12),anchor="nw",width=column_width-2*radius)
+
+		self.info_text_4=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+400, text=ParkingValidator.Titles.THINGS_TO_KNOW,font=('Helvetica',15,'bold'),anchor="nw")
+
+		self.info_text_5=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+430, text=ParkingValidator.Instructions.THINGS_TO_KNOW,font=('Helvetica',12),anchor="nw",width=column_width-2*radius)
 
 		### status section
-		self.status_title=self.canvas.create_text(gutter+radius,gutter*2+radius+card_height,text="Status Messages",font=self.default_font,anchor="nw")
+		self.status_title=self.canvas.create_text(gutter+radius,gutter*2+radius+card_height, text=ParkingValidator.Titles.STATUS_MESSAGES,font=self.default_font,anchor="nw")
 
 		# displays the last few digits of a valid barcode
 		self.status_patron_var=tk.StringVar()
@@ -481,17 +539,23 @@ class ParkingValidator(tk.Frame):
 		self.status_text=self.canvas.create_window(gutter+radius,gutter*2+radius+card_height+80,anchor="nw", width=column_width-2*radius,window=self.status_text_label)
 
 		# set window title
-		self.winfo_toplevel().title(ParkingValidator.Messages.TITLE.value)
+		self.winfo_toplevel().title(ParkingValidator.Messages.TITLE)
 		self.winfo_toplevel().config(bg=self.window_bg)
 
 		# setup validator timer
 		# note that this widget controls the powerusb device directly and manipulates the status box, and hence needs references to both
 		# by default, it is hidden at startup
-		self.validator_clock=ValidatorClock(root,label_font=('Helvetica',20,'bold'),label_bg=self.widget_bg,font=self.default_font,bg=self.widget_bg,relief=tk.FLAT,borderwidth=0,amount=1, powerusb=self.powerusb, status_var=self.status_text_var,status_start=ParkingValidator.Messages.INSERT_TICKET,status_end=ParkingValidator.Messages.VALIDATION_SUCCESS)
-		self.validator=self.canvas.create_window(gutter+column_width-120,gutter*2+radius+card_height,anchor="nw",width=100,window=self.validator_clock)
+		self.validator_clock=ValidatorClock(root,label_font=('Helvetica',20,'bold'),label_bg=self.widget_bg,font=self.default_font,bg=self.widget_bg,relief=tk.FLAT, borderwidth=0,amount=1, powerusb=self.powerusb,status_var=self.status_text_var, status_start=ParkingValidator.Messages.INSERT_TICKET, status_end=ParkingValidator.Messages.VALIDATION_SUCCESS)
+		self.validator=self.canvas.create_window(gutter+column_width-120,gutter*2+radius+card_height,anchor="nw",width=100, window=self.validator_clock)
 		self.validator_clock.canvas=self.canvas
 		self.validator_clock.canvas_id=self.validator
 		self.validator_clock.hide()
+
+		self.touchless_clock=TouchlessClock(root,label_font=('Helvetica',20,'bold'),label_bg=self.widget_bg,font=self.default_font,bg=self.widget_bg, relief=tk.FLAT,borderwidth=0,amount=1,status_var=self.status_text_var, status_start=ParkingValidator.Messages.VALIDATION_AUTO,touchless_callback=self.do_validation)
+		self.touchless=self.canvas.create_window(gutter+column_width-120,gutter*2+radius+card_height, anchor="nw",width=100, window=self.touchless_clock)
+		self.touchless_clock.canvas=self.canvas
+		self.touchless_clock.canvas_id=self.touchless
+		self.touchless_clock.hide()
 
 
 		### debug items
@@ -516,7 +580,7 @@ class ParkingValidator(tk.Frame):
 		self.reset_validation_button=tk.Button(root,text="admin reset [-]",command=self.reset_validation)
 
 		# version information
-		self.footer_text=self.canvas.create_text(gutter+radius,self.screen_height-gutter-radius,text=f"{ParkingValidator.Messages.ABBREVIATION.value} version {self.version}; last updated {self.updated:%Y-%m-%d}",font=('Helvetica',10,'italic'),anchor="nw")
+		self.footer_text=self.canvas.create_text(gutter+radius,self.screen_height-gutter-radius,text=f"{ParkingValidator.Messages.ABBREVIATION} version {self.version}; last updated {self.updated:%Y-%m-%d}",font=('Helvetica',10,'italic'),anchor="nw")
 
 
 	def debug_mode_on(self):
@@ -718,7 +782,13 @@ class ParkingValidator(tk.Frame):
 				# and reset the failure counter
 				self.consecutive_failures=0
 				self.status_text_var.set(ParkingValidator.Messages.VALIDATION_ALLOWED)
+				self.last_scan_time=current_datetime
 				self.validator_button_on()
+
+				# check to see if this should be touchless validation (i.e. no button press needed)
+				if self.touchless_interval>0:
+					self.touchless_clock.amount=self.touchless_interval
+					self.touchless_clock.reset()
 
 			else:
 				# figure out exactly why validation can't happen
