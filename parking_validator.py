@@ -782,7 +782,7 @@ class ParkingValidator(tk.Frame):
 				# and reset the failure counter
 				self.consecutive_failures=0
 				self.status_text_var.set(ParkingValidator.Messages.VALIDATION_ALLOWED)
-				self.last_scan_time=current_datetime
+				self.last_scan_time=dt.datetime.now()
 				self.validator_button_on()
 
 				# check to see if this should be touchless validation (i.e. no button press needed)
