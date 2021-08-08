@@ -95,10 +95,10 @@ def gen_token(update_config=False):
 			print(f"salt: {salt}")
 			print(f"client key and secret token: {crypto.crypted_key_secret}")
 		else:
-			config=toml.load("parking_validator.conf")
+			config=toml.load("resources/parking_validator.conf")
 			config['sierra rest api']['salt']=salt.decode('utf-8')
 			config['sierra rest api']['crypted_key_secret']=crypto.crypted_key_secret.decode('utf-8')
-			toml.dump(config,open("parking_validator.conf",'w+'))
+			toml.dump(config,open("resources/parking_validator.conf",'w+'))
 	except:
 		print("Decryption test failed!")
 
@@ -121,10 +121,10 @@ def gen_email_password(update_config=False):
 			print(f"salt: {salt}")
 			print(f"crypted email password: {crypto.crypted_key_secret}")
 		else:
-			config=toml.load("parking_validator.conf")
+			config=toml.load("resources/parking_validator.conf")
 			config['reports']['salt']=salt.decode('utf-8')
 			config['reports']['crypted_email_password']=crypto.crypted_key_secret.decode('utf-8')
-			toml.dump(config,open("parking_validator.conf",'w+'))
+			toml.dump(config,open("resources/parking_validator.conf",'w+'))
 	except:
 		print("Decryption test failed!")
 

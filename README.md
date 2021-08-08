@@ -5,6 +5,10 @@ Use the desktop shortcut or run
 
 	python3 parkingvalidator.py
 
+### Admin mode
+
+'/' exits the validator program (only in admin/debug mode)
+
 # Configuration
 
 ## Change encrypted data

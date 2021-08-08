@@ -138,7 +138,7 @@ class PPLibraryCard(LibraryCard):
 	PPL library card object.
 	"""
 
-	def __init__(self,fail_blocks=['g'],**kw):
+	def __init__(self,fail_blocks=['g','m'],**kw):
 		"""
 		Initialize `LibraryCard` object with a barcode length of 14.
 		"""

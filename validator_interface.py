@@ -140,7 +140,8 @@ class TimerClock(LabeledBox):
 		self.amount=amount
 		self.canvas_id=None
 		self.canvas=None
-		if start_immediately:
+		self.start_immediately=start_immediately
+		if self.start_immediately:
 			self.reset()
 		#self.tick()
 
@@ -212,14 +213,16 @@ class TouchlessClock(TimerClock):
 		self.status_var.set(self.status_start)
 
 	def hide(self):
+		self.hide_only()
+		self.status_var.set(self.status_end)
+		if self.touchless_callback is not None:
+			self.touchless_callback()
+			
+	def hide_only(self):
 		if self.canvas_id is None or self.canvas is None:
 			return
 
 		self.canvas.itemconfig(self.canvas_id,state="hidden")
-		self.status_var.set(self.status_end)
-		self.touchless_callback()
-
-
 
 
 class KeyInput(LabeledBox):

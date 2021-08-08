@@ -63,6 +63,7 @@ class ParkingValidator(tk.Frame):
 		VALID_ACCOUNT="Valid patron account detected!"
 		VALIDATION_ALLOWED=f"{SUCCESS} {VALID_ACCOUNT}\n\nPress [+] to validate."
 		VALIDATION_AUTO=f"{SUCCESS} {VALID_ACCOUNT}\n\nValidator will be turned on in a few seconds."
+		VALIDATION_TURNED_ON=f"Validation machine is turning on.\n\nPlease have your ticket ready."
 		INSERT_TICKET="Validation process started.\n\nPlease insert ticket into validation machine."
 		VALIDATION_SUCCESS=f"{SUCCESS} Parking validation successful!\n\nHave a nice day!"
 		ADMIN_MODE="Admin mode active!\n\n[+] to run validation machine.\n\n[-] to reset daily validations for current card.\n\n[*] to exit admin mode."
@@ -123,8 +124,8 @@ class ParkingValidator(tk.Frame):
 		Initialize parking validator; top-level object is a tkinter Frame.
 		"""
 		super().__init__(root,**kw)
-		self.version=0.16
-		self.updated=dt.datetime(2020,12,7)
+		self.version=0.17
+		self.updated=dt.datetime(2021,8,8)
 
 		###############################
 		# user-configurable variables #
@@ -213,8 +214,10 @@ class ParkingValidator(tk.Frame):
 		self.validator_button_visible=False
 
 		# UI defaults
-		self.title_font=('Helvetica',25,'bold')
-		self.default_font=('Helvetica',14)
+		self.title_font=('Helvetica',30,'bold')
+		self.subtitle_font=('Helvetica',24,'bold')
+		self.default_font=('Helvetica',18)
+		self.instructions_font=('Helvetica',self.instructions_font_size)
 		self.default_geom_kw={'sticky':'WENS','padx':5,'pady':20}
 		self.default_style_kw={'borderwidth':5,'fg':self.widget_fg,'bg':self.widget_bg,'label_fg':self.widget_fg,'relief':tk.FLAT,}
 		self.keybinds={'0':"0",'1':"1",'2':"2",'3':"3",'4':"4",'5':"5",'6':"6",'7':"7",'8':"8",'9':"9", '<KP_0>':"0",'<KP_1>':"1",'<KP_2>':"2",'<KP_3>':"3",'<KP_4>':"4", '<KP_5>':"5",'<KP_6>':"6",'<KP_7>':"7",'<KP_8>':"8",'<KP_9>':"9", '<KP_Insert>':"0",'<KP_End>':"1",'<KP_Down>':"2",'<KP_Next>':"3",'<KP_Left>':"4", '<KP_Begin>':"5",'<KP_Right>':"6",'<KP_Home>':"7",'<KP_Up>':"8",'<KP_Prior>':"9"}
@@ -304,6 +307,7 @@ class ParkingValidator(tk.Frame):
 			print("Decryption of email password failed!")
 			exit()
 
+		#print(self.email_password)
 		# if decryption succeeded, restore the main window
 		root.update()
 		root.deiconify()
@@ -321,6 +325,7 @@ class ParkingValidator(tk.Frame):
 		self.scan_interval=int(config['validation']['interface timeout in seconds'])
 		self.validate_interval=int(config['validation']['validator timeout in seconds'])
 		self.touchless_interval=int(config['validation']['touchless validation delay'])
+		self.validate_activation_delay=int(config['validation']['validator delay for activation in seconds'])
 
 		# load general config values
 		self.maintenance_interval=int(config['general']['maintenance interval in seconds']*1000)
@@ -330,6 +335,7 @@ class ParkingValidator(tk.Frame):
 		self.widget_bg=config['general']['widget background color']
 		self.window_bg=config['general']['window background color']
 		self.widget_fg=config['general']['widget text color']
+		self.instructions_font_size=config['general']['instructions font size']
 
 		# load failure config values
 		self.failures_threshold=config['failures']['threshold']
@@ -389,7 +395,7 @@ class ParkingValidator(tk.Frame):
 
 		# after the first minute on the first day of the month, make the report for last month
 		# this should occur just after midnight
-		if (current_datetime.day==15 and current_datetime.hour==21 and current_datetime.minute==8 and current_datetime.second<30):
+		if (current_datetime.day==1 and current_datetime.hour==0 and current_datetime.minute==0 and current_datetime.second<30):
 
 			# update the status just in case someone is about to try to do a validation
 			self.status_text_var.set(ParkingValidator.Messages.EMAIL)
@@ -502,41 +508,41 @@ class ParkingValidator(tk.Frame):
 
 		# widget that has the keybindings; can effectively be typed in
 		self.input_field=KeyInput2(root,callback=self.validate_barcode,keybinds=self.keybinds, font=('Helvetica',40),max_length=PPLibraryCard().barcode_length)
-		self.input_field_canvas=self.canvas.create_window(gutter+column_width/2,gutter+radius+190, window=self.input_field, anchor="n")
+		self.input_field_canvas=self.canvas.create_window(gutter+column_width/2,gutter+radius+210, window=self.input_field, anchor="n")
 
 
 		### help/info section
 		# lots of info text here, broken up into blocks according to formatting requirements
 		# could be replaced with an HTML-parsing widget from an external package if more complex formatting is needed
 
-		self.info_text_1=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius, text=ParkingValidator.Titles.VALIDATOR_INSTRUCTIONS,font=('Helvetica',20,'bold'),anchor="nw")
+		self.info_text_1=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius, text=ParkingValidator.Titles.VALIDATOR_INSTRUCTIONS,font=self.title_font,anchor="nw")
 
-		self.info_text_2=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+50, text=ParkingValidator.Titles.HOW_TO_VALIDATE,font=('Helvetica',15,'bold'),anchor="nw")
+		self.info_text_2=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+50, text=ParkingValidator.Titles.HOW_TO_VALIDATE,font=self.subtitle_font,anchor="nw")
 
 		instructions_text=ParkingValidator.Instructions.NORMAL_INSTRUCTIONS.value
 
 		if self.touchless_interval>0:
 			instructions_text=ParkingValidator.Instructions.TOUCHLESS_INSTRUCTIONS.value
 
-		self.info_text_3=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+80, text=instructions_text.replace("{self.validate_interval}",f"{self.validate_interval}"),font=('Helvetica',12),anchor="nw",width=column_width-2*radius)
+		self.info_text_3=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+100, text=instructions_text.replace("{self.validate_interval}",f"{self.validate_interval}"),font=self.instructions_font,anchor="nw",width=column_width-2*radius)
 
-		self.info_text_4=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+400, text=ParkingValidator.Titles.THINGS_TO_KNOW,font=('Helvetica',15,'bold'),anchor="nw")
+		self.info_text_4=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+630, text=ParkingValidator.Titles.THINGS_TO_KNOW,font=self.subtitle_font,anchor="nw")
 
-		self.info_text_5=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+430, text=ParkingValidator.Instructions.THINGS_TO_KNOW,font=('Helvetica',12),anchor="nw",width=column_width-2*radius)
+		self.info_text_5=self.canvas.create_text(gutter*2+column_width+radius,gutter+radius+670, text=ParkingValidator.Instructions.THINGS_TO_KNOW,font=self.default_font,anchor="nw",width=column_width-2*radius)
 
 		### status section
-		self.status_title=self.canvas.create_text(gutter+radius,gutter*2+radius+card_height, text=ParkingValidator.Titles.STATUS_MESSAGES,font=self.default_font,anchor="nw")
+		self.status_title=self.canvas.create_text(gutter+radius,gutter*2+radius+card_height, text=ParkingValidator.Titles.STATUS_MESSAGES,font=self.title_font,anchor="nw")
 
 		# displays the last few digits of a valid barcode
 		self.status_patron_var=tk.StringVar()
-		self.status_patron_label=tk.Label(root,textvariable=self.status_patron_var,bg=self.widget_bg,wraplength=column_width-2*radius,justify=tk.LEFT,anchor="nw",font=('Helvetica',20,'bold'))
-		self.status_patron=self.canvas.create_window(gutter+radius,gutter*2+radius+card_height+30,anchor="nw", width=column_width-2*radius,window=self.status_patron_label)
+		self.status_patron_label=tk.Label(root,textvariable=self.status_patron_var,bg=self.widget_bg,wraplength=column_width-2*radius,justify=tk.LEFT,anchor="nw",font=self.default_font)
+		self.status_patron=self.canvas.create_window(gutter+radius,gutter*2+radius+card_height+60,anchor="nw", width=column_width-2*radius,window=self.status_patron_label)
 
 		# status text
 		self.status_text_var=tk.StringVar()
-		self.status_text_label=tk.Label(root,textvariable=self.status_text_var,bg=self.widget_bg,wraplength=column_width-2*radius,justify=tk.LEFT,anchor="nw",font=('Helvetica',20,'bold'))
+		self.status_text_label=tk.Label(root,textvariable=self.status_text_var,bg=self.widget_bg,wraplength=column_width-2*radius,justify=tk.LEFT,anchor="nw",font=self.title_font)
 		self.status_text_var.set(ParkingValidator.Messages.SCAN_CARD)
-		self.status_text=self.canvas.create_window(gutter+radius,gutter*2+radius+card_height+80,anchor="nw", width=column_width-2*radius,window=self.status_text_label)
+		self.status_text=self.canvas.create_window(gutter+radius,gutter*2+radius+card_height+120,anchor="nw", width=column_width-2*radius,window=self.status_text_label)
 
 		# set window title
 		self.winfo_toplevel().title(ParkingValidator.Messages.TITLE)
@@ -545,17 +551,24 @@ class ParkingValidator(tk.Frame):
 		# setup validator timer
 		# note that this widget controls the powerusb device directly and manipulates the status box, and hence needs references to both
 		# by default, it is hidden at startup
-		self.validator_clock=ValidatorClock(root,label_font=('Helvetica',20,'bold'),label_bg=self.widget_bg,font=self.default_font,bg=self.widget_bg,relief=tk.FLAT, borderwidth=0,amount=1, powerusb=self.powerusb,status_var=self.status_text_var, status_start=ParkingValidator.Messages.INSERT_TICKET, status_end=ParkingValidator.Messages.VALIDATION_SUCCESS)
-		self.validator=self.canvas.create_window(gutter+column_width-120,gutter*2+radius+card_height,anchor="nw",width=100, window=self.validator_clock)
+		self.validator_clock=ValidatorClock(root,label_font=self.title_font,label_bg=self.widget_bg, font=self.default_font,bg=self.widget_bg,relief=tk.FLAT, borderwidth=0,amount=1, powerusb=self.powerusb,status_var=self.status_text_var, status_start=ParkingValidator.Messages.INSERT_TICKET, status_end=ParkingValidator.Messages.VALIDATION_SUCCESS)
+		self.validator=self.canvas.create_window(gutter+column_width-160,gutter*2+radius+card_height,anchor="nw",width=140, window=self.validator_clock)
 		self.validator_clock.canvas=self.canvas
 		self.validator_clock.canvas_id=self.validator
 		self.validator_clock.hide()
 
-		self.touchless_clock=TouchlessClock(root,label_font=('Helvetica',20,'bold'),label_bg=self.widget_bg,font=self.default_font,bg=self.widget_bg, relief=tk.FLAT,borderwidth=0,amount=1,status_var=self.status_text_var, status_start=ParkingValidator.Messages.VALIDATION_AUTO,touchless_callback=self.do_validation)
-		self.touchless=self.canvas.create_window(gutter+column_width-120,gutter*2+radius+card_height, anchor="nw",width=100, window=self.touchless_clock)
+
+		self.touchless_clock=TouchlessClock(root,label_font=self.title_font,label_bg=self.widget_bg, font=self.default_font,bg=self.widget_bg, relief=tk.FLAT,borderwidth=0,amount=1, status_var=self.status_text_var, status_start=ParkingValidator.Messages.VALIDATION_AUTO,touchless_callback=self.do_validation)
+		self.touchless=self.canvas.create_window(gutter+column_width-160,gutter*2+radius+card_height, anchor="nw",width=140, window=self.touchless_clock)
 		self.touchless_clock.canvas=self.canvas
 		self.touchless_clock.canvas_id=self.touchless
-		self.touchless_clock.hide()
+		self.touchless_clock.hide_only()
+		
+		self.touchless_clock_delay=TouchlessClock(root,label_font=self.title_font,label_bg=self.widget_bg, font=self.default_font,bg=self.widget_bg, relief=tk.FLAT,borderwidth=0,amount=5,status_var=self.status_text_var, status_start=ParkingValidator.Messages.VALIDATION_TURNED_ON,status_end=ParkingValidator.Messages.INSERT_TICKET)
+		self.touchless_delay=self.canvas.create_window(gutter+column_width-160,gutter*2+radius+card_height, anchor="nw",width=140, window=self.touchless_clock_delay)
+		self.touchless_clock_delay.canvas=self.canvas
+		self.touchless_clock_delay.canvas_id=self.touchless_delay
+		self.touchless_clock_delay.hide_only()
 
 
 		### debug items
@@ -853,8 +866,12 @@ class ParkingValidator(tk.Frame):
 
 			# turn on the validator clock, which controls the powerusb outlet itself
 			# note that this runs in its own thread and doesn't block the main thread since it's a separate widget
-			self.validator_clock.amount=self.validate_interval
+			self.validator_clock.amount=self.validate_interval+self.validate_activation_delay
 			self.validator_clock.reset()
+			
+			# display countdown timer for validation machine activation (since it takes time to turn on)
+			self.touchless_clock_delay.amount=self.validate_activation_delay
+			self.touchless_clock_delay.reset()
 
 		else:
 			self.display_error()
@@ -945,6 +962,8 @@ class ParkingValidator(tk.Frame):
 		except:
 			display_error("COMM_ERROR")
 			return None
+
+		#print(data)
 
 		# check if a valid patron record was retrieved
 		if data is None:
