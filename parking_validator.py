@@ -152,10 +152,12 @@ class ParkingValidator(tk.Frame):
 		# 5 seconds between maintenance ticks
 		# 30 seconds between input clears
 		# 20 seconds to insert a ticket (validator run time)
+		# 5 seconds to wait after validator powered before telling user to insert ticket
 		self.db_reset_interval=24*3600
 		self.maintenance_interval=5*1000
 		self.scan_interval=30
 		self.validate_interval=20
+		self.validate_activation_delay=5
 
 		# if zero, a key must be pressed to turn on validator, otherwise the specified delay in seconds is used
 		self.touchless_interval=0
@@ -174,6 +176,7 @@ class ParkingValidator(tk.Frame):
 		self.widget_fg="#000"
 		self.screen_width=1366
 		self.screen_height=768
+		self.instructions_font_size=18
 
 		# REST API values
 		self.rest_api_url=""
