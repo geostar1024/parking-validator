@@ -12,7 +12,7 @@ The interface is designed to be navigable with only the numpad
 
 * ``[*]`` cancels the current validation in progress (and exits admin/debug mode)
 * ``[/]`` or ``[ESC]`` exits the validator program (only in admin/debug mode)
-* ``[+]`` manually executes a validation (only in admin/debug mode)
+* ``[+]`` manually starts a validation (not needed in touchless mode)
 * ``[-]`` resets daily number of allowed validations (only in admin/debug mode)
 
 # Configuration
