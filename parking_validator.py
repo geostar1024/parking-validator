@@ -382,7 +382,7 @@ class ParkingValidator(tk.Frame):
 
 		# drop and recreate patron table when enough time has elapsed; disabled if interval is zero
 		if (current_datetime-self.db.get_last_reset()).total_seconds()>self.db_reset_interval and self.db_reset_interval>0:
-			self.db.drop_patron_table()
+			self.db.drop_patron_table(run=True)
 			self.db.create_patron_table()
 			self.db.log_reset()
 
@@ -566,7 +566,7 @@ class ParkingValidator(tk.Frame):
 		self.touchless_clock.canvas=self.canvas
 		self.touchless_clock.canvas_id=self.touchless
 		self.touchless_clock.hide_only()
-		
+
 		self.touchless_clock_delay=TouchlessClock(root,label_font=self.title_font,label_bg=self.widget_bg, font=self.default_font,bg=self.widget_bg, relief=tk.FLAT,borderwidth=0,amount=5,status_var=self.status_text_var, status_start=ParkingValidator.Messages.VALIDATION_TURNED_ON,status_end=ParkingValidator.Messages.INSERT_TICKET)
 		self.touchless_delay=self.canvas.create_window(gutter+column_width-160,gutter*2+radius+card_height, anchor="nw",width=140, window=self.touchless_clock_delay)
 		self.touchless_clock_delay.canvas=self.canvas
@@ -871,7 +871,7 @@ class ParkingValidator(tk.Frame):
 			# note that this runs in its own thread and doesn't block the main thread since it's a separate widget
 			self.validator_clock.amount=self.validate_interval+self.validate_activation_delay
 			self.validator_clock.reset()
-			
+
 			# display countdown timer for validation machine activation (since it takes time to turn on)
 			self.touchless_clock_delay.amount=self.validate_activation_delay
 			self.touchless_clock_delay.reset()
